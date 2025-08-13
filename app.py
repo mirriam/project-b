@@ -1,0 +1,69 @@
+import requests
+from bs4 import BeautifulSoup
+import time
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+
+app = Flask(__name__)
+CORS(app)  # Enable CORS for all domains
+
+headers = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.93 Safari/537.36"
+}
+
+def scrape_job_details(job_url):
+    """Scrape details from a LinkedIn job posting."""
+    try:
+        resp = requests.get(job_url, headers=headers, timeout=15)
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        job_title = soup.select_one("h1").get_text(strip=True) if soup.select_one("h1") else ""
+        company_name = soup.select_one("span > a").get_text(strip=True) if soup.select_one("span > a") else ""
+        location = soup.select_one("div:nth-child(1) > span:nth-child(2)")
+        location = location.get_text(strip=True) if location else ""
+        job_type = soup.select_one("section.core-section-container.my-3.description > div > ul > li:nth-child(2) > span")
+        job_type = job_type.get_text(strip=True) if job_type else ""
+
+        application_anchor = soup.select_one("#teriary-cta-container > div > a")
+        application_url = application_anchor['href'] if application_anchor and application_anchor.has_attr('href') else ""
+
+        return {
+            "title": job_title,
+            "company": company_name,
+            "location": location,
+            "type": job_type,
+            "apply_link": application_url,
+            "source": job_url
+        }
+    except Exception as e:
+        return {"error": f"Error scraping {job_url}: {e}"}
+
+@app.route("/scrape", methods=["GET"])
+def scrape():
+    """API endpoint to scrape LinkedIn jobs."""
+    country = request.args.get("country", "United States")
+    keywords = request.args.get("keywords", "")
+
+    if not country:
+        return jsonify({"error": "Country parameter is required"}), 400
+
+    jobs = []
+    try:
+        for i in range(0, 2):  # scrape first 2 pages for demo
+            url = f"https://www.linkedin.com/jobs/search?keywords={keywords}&location={country}&start={i * 25}"
+            resp = requests.get(url, headers=headers, timeout=15)
+            soup = BeautifulSoup(resp.text, "html.parser")
+
+            job_links = [a["href"] for a in soup.select("#main-content > section > ul > li > div > a") if a.get("href")]
+            for link in job_links:
+                job_data = scrape_job_details(link)
+                jobs.append(job_data)
+                time.sleep(1)  # avoid rate limits
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    return jsonify(jobs)
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000, debug=True)
+
